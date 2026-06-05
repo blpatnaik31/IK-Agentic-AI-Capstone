@@ -1,0 +1,359 @@
+{
+  "name": "Mira — Task 1: Intake Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "trigger-chat",
+      "name": "Chat Trigger",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 300],
+      "webhookId": "mira-intake-chat",
+      "notes": "Handles text chat from Agent Chat UI and Google Chat webhook"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mira-voice-input",
+        "options": {}
+      },
+      "id": "trigger-voice",
+      "name": "Voice Input Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 100],
+      "webhookId": "mira-voice-input",
+      "notes": "Receives microphone audio via n8n native audio node. Binary audio data passed to Gemini for transcription."
+    },
+    {
+      "parameters": {
+        "operation": "getMessages",
+        "filters": {
+          "labelIds": ["INBOX"],
+          "maxResults": 10
+        }
+      },
+      "id": "gmail-read",
+      "name": "Gmail — Read Inbox",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [0, 500],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "email-content",
+              "name": "inputText",
+              "value": "={{ $json.snippet }}",
+              "type": "string"
+            },
+            {
+              "id": "email-source",
+              "name": "inputSource",
+              "value": "email",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "extract-email",
+      "name": "Extract Email Content",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 500]
+    },
+    {
+      "parameters": {
+        "model": "gemini-2.5-flash",
+        "options": {
+          "systemMessage": "Transcribe the audio input to text accurately. Output only the transcription with no additional commentary.",
+          "audioInput": true
+        }
+      },
+      "id": "gemini-audio-transcribe",
+      "name": "Gemini 2.5 Flash — Audio Transcription",
+      "type": "@n8n/n8n-nodes-langchain.lmGoogleGemini",
+      "typeVersion": 1,
+      "position": [220, 100],
+      "notes": "Handles both microphone (live) and uploaded audio files. Gemini 2.5 Flash chosen: native multi-modal audio support, $0.30/$2.50/M — cheapest in stack. Calls capped below 200K tokens to avoid cost-doubling surcharge."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "voice-content",
+              "name": "inputText",
+              "value": "={{ $json.text }}",
+              "type": "string"
+            },
+            {
+              "id": "voice-source",
+              "name": "inputSource",
+              "value": "voice",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "extract-voice",
+      "name": "Extract Transcription",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [440, 100]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-6",
+        "options": {
+          "systemMessage": "You are Mira, an AI Project Intelligence Assistant for a Logistics & Supply Chain company.\n\n## YOUR ROLE\nYou are the first point of contact. Your job is to:\n1. Greet the user warmly and professionally\n2. Collect their identity: full name, job title, project role, and purpose for engaging with Mira\n3. Gather raw project information through conversation or from uploaded files\n4. Validate completeness against the 12 mandatory PMI fields\n5. Output a structured markdown intake document only after the user signals readiness\n\n## MANDATORY PMI FIELDS (12 total)\n### Strategic Alignment & Scope\n- project_purpose: Business case and justification\n- measurable_objectives: Goals with success criteria\n- high_level_requirements: Overarching capabilities required\n- boundaries_and_deliverables: In-scope, out-of-scope, major outputs\n\n### Constraints & Assumptions\n- milestone_schedule: Hard deadlines and key dates\n- financial_resources: Budget constraints or funding limits\n- overall_project_risk: Macro risks (threats and opportunities)\n- high_level_assumptions: Planning assumptions\n\n### Governance & Stakeholders\n- key_stakeholder_list: Primary individuals or groups\n- project_approval_requirements: Success criteria and sign-off authority\n- assigned_pm_authority: PM name and authority level\n- sponsor_authority: Sponsor name and funding authority\n\n## INFORMATION OWNER MAP\nUse when the user's role cannot provide a required field:\n- project_purpose → Project Sponsor\n- measurable_objectives → Project Sponsor / PM\n- high_level_requirements → Product Stakeholders / PM\n- boundaries_and_deliverables → PM / Product Stakeholders\n- milestone_schedule → PM / Project Sponsor\n- financial_resources → Project Sponsor / Finance\n- overall_project_risk → PM / Risk Owner\n- high_level_assumptions → PM / Technical Lead\n- key_stakeholder_list → PM / Project Sponsor\n- project_approval_requirements → Project Sponsor\n- assigned_pm_authority → Project Sponsor / HR\n- sponsor_authority → Executive Leadership\n\n## HALLUCINATION GUARDRAILS\n- NEVER infer, assume, or fill in missing fields\n- If a field is missing or ambiguous, ask the user directly\n- If the user's role cannot provide the missing field, name the correct information owner\n- Log all missing fields as UNKNOWN in the output\n- Do NOT generate the output markdown until the user signals readiness\n\n## VAGUE INPUT RULE\nIf the user provides a vague or incomplete answer to any mandatory field, respond with:\n'I need a more specific answer for [field]. For example: [concrete example]. Who on your team can confirm this?'\n\n## PM/TPM APPROVAL DETECTION\nThe PM/TPM signals approval via:\n- Thumbs-up emoji (👍)\n- Explicit phrase: 'Go Ahead'\nAny other response (edits, questions, corrections) is treated as a change request. Return to information gathering and address the feedback before regenerating output.\n\n## OUTPUT FORMAT\nWhen the user signals readiness, generate a structured markdown document with these exact sections:\n\n```markdown\n# Mira Intake Document\n**Generated:** [timestamp]\n**Session ID:** [session-id]\n\n## User Identity\n- Name: [value]\n- Title: [value]\n- Project Role: [value]\n- Purpose: [value]\n\n## Strategic Alignment & Scope\n- Project Purpose: [value or UNKNOWN]\n- Measurable Objectives: [value or UNKNOWN]\n- High-Level Requirements: [value or UNKNOWN]\n- Boundaries & Deliverables: [value or UNKNOWN]\n\n## Constraints & Assumptions\n- Milestone Schedule: [value or UNKNOWN]\n- Financial Resources: [value or UNKNOWN]\n- Overall Project Risk: [value or UNKNOWN]\n- High-Level Assumptions: [value or UNKNOWN]\n\n## Governance & Stakeholders\n- Key Stakeholder List: [value or UNKNOWN]\n- Project Approval Requirements: [value or UNKNOWN]\n- Assigned PM & Authority: [value or UNKNOWN]\n- Sponsor Authority: [value or UNKNOWN]\n\n## Missing Fields Log\n| Field | Status | Information Owner |\n|---|---|---|\n| [field] | UNKNOWN | [owner] |\n\n## Implementation Framework Hints\n- Detected signals: [Waterfall / Hybrid / Agile indicators from input]\n- Confidence: [High / Medium / Low]\n\n## Tags\n#[artifact-type] #[stakeholder-role] #[framework-hint]\n```"
+        }
+      },
+      "id": "agent-intake",
+      "name": "Mira Intake Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-6",
+        "options": {}
+      },
+      "id": "llm-sonnet",
+      "name": "Claude Sonnet 4.6",
+      "type": "@n8n/n8n-nodes-langchain.lmAnthropicClaude",
+      "typeVersion": 1,
+      "position": [660, 500],
+      "notes": "Primary LLM — lowest tool hallucination rate (1.43%), #2 Bash recovery, 1M flat context, 90% cache discount on system prompt"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.sessionId }}",
+        "contextWindowLength": 20
+      },
+      "id": "memory-buffer",
+      "name": "Conversation Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [880, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const sessionId = $input.first().json.sessionId || 'session-' + Date.now();\nconst timestamp = new Date().toISOString();\nconst agentOutput = $input.first().json.output || '';\nconst chatHistory = $input.first().json.chatHistory || [];\n\n// Count UNKNOWN fields\nconst missingFields = (agentOutput.match(/UNKNOWN/g) || []).length;\nconst fieldsCollected = 12 - missingFields;\nconst guardrailTriggered = missingFields > 0 ? 'Y' : 'N';\n\n// Extract user identity from output\nconst nameMatch = agentOutput.match(/- Name: (.+)/);\nconst titleMatch = agentOutput.match(/- Title: (.+)/);\nconst roleMatch = agentOutput.match(/- Project Role: (.+)/);\nconst purposeMatch = agentOutput.match(/- Purpose: (.+)/);\n\n// Compute diff — capture any PM feedback in prior turns\nconst pmFeedback = chatHistory\n  .filter(m => m.role === 'user' && !m.content.includes('👍') && m.content !== 'Go Ahead')\n  .map(m => m.content)\n  .join(' | ');\n\nconst logEntry = {\n  timestamp,\n  session_id: sessionId,\n  agent: 'Task1_IntakeAgent',\n  // Learning Field 1: User Profile\n  user_name: nameMatch ? nameMatch[1].trim() : 'UNKNOWN',\n  user_title: titleMatch ? titleMatch[1].trim() : 'UNKNOWN',\n  user_role: roleMatch ? roleMatch[1].trim() : 'UNKNOWN',\n  // Learning Field 2: Reason for Interaction\n  reason_for_interaction: purposeMatch ? purposeMatch[1].trim() : 'UNKNOWN',\n  // Learning Field 3: Approvals vs Disapprovals\n  approval_count: 0,\n  disapproval_count: 0,\n  // Learning Field 4: Changes and Feedback\n  pm_feedback_and_changes: pmFeedback || 'None',\n  // Supporting metrics\n  fields_collected: fieldsCollected,\n  fields_missing: missingFields,\n  guardrail_triggered: guardrailTriggered,\n  outcome: 'Pending_PM_Approval',\n  raw_output_snapshot: agentOutput.substring(0, 500)\n};\n\nreturn [{ json: { logEntry, agentOutput, sessionId } }];"
+      },
+      "id": "learning-logger",
+      "name": "Learning File Logger",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "mode": "expression",
+          "value": "={{ $vars.LEARNING_FILE_SHEET_ID }}"
+        },
+        "sheetName": "Task1_IntakeAgent",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ $json.logEntry.timestamp }}",
+            "session_id": "={{ $json.logEntry.session_id }}",
+            "user_name": "={{ $json.logEntry.user_name }}",
+            "user_title": "={{ $json.logEntry.user_title }}",
+            "user_role": "={{ $json.logEntry.user_role }}",
+            "reason_for_interaction": "={{ $json.logEntry.reason_for_interaction }}",
+            "approval_count": "={{ $json.logEntry.approval_count }}",
+            "disapproval_count": "={{ $json.logEntry.disapproval_count }}",
+            "pm_feedback_and_changes": "={{ $json.logEntry.pm_feedback_and_changes }}",
+            "fields_collected": "={{ $json.logEntry.fields_collected }}",
+            "fields_missing": "={{ $json.logEntry.fields_missing }}",
+            "guardrail_triggered": "={{ $json.logEntry.guardrail_triggered }}",
+            "outcome": "={{ $json.logEntry.outcome }}"
+          }
+        }
+      },
+      "id": "sheets-logger",
+      "name": "Append to Learning Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1200, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.chatInput }}",
+              "value2": "Go Ahead",
+              "operation": "equals"
+            }
+          ],
+          "combinator": "or",
+          "options": {}
+        },
+        "options": {}
+      },
+      "id": "approval-check",
+      "name": "PM/TPM Approval Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1400, 300],
+      "notes": "Approval: thumbs-up (👍) OR explicit 'Go Ahead'. All other responses treated as change requests."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Update approval count in learning sheet\nconst logEntry = $input.first().json.logEntry;\nlogEntry.approval_count = 1;\nlogEntry.outcome = 'Approved';\nreturn [{ json: { ...$input.first().json, logEntry } }];"
+      },
+      "id": "update-approval",
+      "name": "Update Approval Count",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1600, 200]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "approved-output",
+              "name": "intakeMarkdown",
+              "value": "={{ $json.agentOutput }}",
+              "type": "string"
+            },
+            {
+              "id": "session-id",
+              "name": "sessionId",
+              "value": "={{ $json.sessionId }}",
+              "type": "string"
+            },
+            {
+              "id": "approved-status",
+              "name": "status",
+              "value": "approved",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "output-markdown",
+      "name": "Output Approved Intake Markdown",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1800, 200],
+      "notes": "Passes approved markdown to Task 2 Router Agent"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Update disapproval count and capture PM feedback\nconst logEntry = $input.first().json.logEntry;\nconst feedback = $input.first().json.chatInput || '';\nlogEntry.disapproval_count += 1;\nlogEntry.pm_feedback_and_changes = (logEntry.pm_feedback_and_changes || '') + ' | Revision: ' + feedback;\nlogEntry.outcome = 'Revision_Requested';\nreturn [{ json: { ...$input.first().json, logEntry, feedback } }];"
+      },
+      "id": "update-disapproval",
+      "name": "Update Disapproval & Capture Feedback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1600, 400]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "revision-msg",
+              "name": "chatInput",
+              "value": "={{ 'Mira, please revise based on this feedback: ' + $json.feedback }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "return-revision",
+      "name": "Return to Mira for Revision",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1800, 400],
+      "notes": "Routes feedback back to Mira Intake Agent for revision loop"
+    }
+  ],
+  "connections": {
+    "Chat Trigger": {
+      "main": [[{ "node": "Mira Intake Agent", "type": "main", "index": 0 }]]
+    },
+    "Voice Input Trigger": {
+      "main": [[{ "node": "Gemini 2.5 Flash — Audio Transcription", "type": "main", "index": 0 }]]
+    },
+    "Gemini 2.5 Flash — Audio Transcription": {
+      "main": [[{ "node": "Extract Transcription", "type": "main", "index": 0 }]]
+    },
+    "Extract Transcription": {
+      "main": [[{ "node": "Mira Intake Agent", "type": "main", "index": 0 }]]
+    },
+    "Gmail — Read Inbox": {
+      "main": [[{ "node": "Extract Email Content", "type": "main", "index": 0 }]]
+    },
+    "Extract Email Content": {
+      "main": [[{ "node": "Mira Intake Agent", "type": "main", "index": 0 }]]
+    },
+    "Claude Sonnet 4.6": {
+      "ai_languageModel": [[{ "node": "Mira Intake Agent", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Conversation Memory": {
+      "ai_memory": [[{ "node": "Mira Intake Agent", "type": "ai_memory", "index": 0 }]]
+    },
+    "Mira Intake Agent": {
+      "main": [[{ "node": "Learning File Logger", "type": "main", "index": 0 }]]
+    },
+    "Learning File Logger": {
+      "main": [[{ "node": "Append to Learning Sheet", "type": "main", "index": 0 }]]
+    },
+    "Append to Learning Sheet": {
+      "main": [[{ "node": "PM/TPM Approval Check", "type": "main", "index": 0 }]]
+    },
+    "PM/TPM Approval Check": {
+      "main": [
+        [{ "node": "Update Approval Count", "type": "main", "index": 0 }],
+        [{ "node": "Update Disapproval & Capture Feedback", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Approval Count": {
+      "main": [[{ "node": "Output Approved Intake Markdown", "type": "main", "index": 0 }]]
+    },
+    "Update Disapproval & Capture Feedback": {
+      "main": [[{ "node": "Return to Mira for Revision", "type": "main", "index": 0 }]]
+    },
+    "Return to Mira for Revision": {
+      "main": [[{ "node": "Mira Intake Agent", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["mira", "intake", "task-1", "capstone"],
+  "triggerCount": 3,
+  "variables": {
+    "LEARNING_FILE_SHEET_ID": "YOUR_GOOGLE_SHEET_ID_HERE"
+  },
+  "versionId": "1.1.0",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "mira-capstone"
+  },
+  "$schema": "https://raw.githubusercontent.com/n8n-io/n8n/master/packages/cli/src/databases/entities/WorkflowEntity.ts"
+}
