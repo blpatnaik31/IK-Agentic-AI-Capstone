@@ -1,0 +1,17 @@
+CalendarMate - Baseline Test Dataset for Core Capabilities
+=============================================================
+Run each input through your CalendarMate pipeline.
+Check the output against the "Expected Output Must Contain" in the problem statement.
+
+T1: What does my day look like today?
+T2: Give me a summary of my meetings for tomorrow.
+T3: Schedule a 30-minute meeting with sarah@company.com tomorrow at 2pm.
+T4: Set up a sync with the design team sometime this week.
+T5: Find a time for a 1-hour meeting with john@ext.com and lisa@ext.com next Monday.
+T6: Schedule something for Sunday at 6am.
+T7: Summarize my unread emails.
+T8: What emails need my attention today?
+T9: Book a meeting but I forgot with whom.
+T10: Do I have any conflicts this week?
+T11: Schedule a meeting at the same time as my existing standup.
+T12: What's happening next Thursday?
